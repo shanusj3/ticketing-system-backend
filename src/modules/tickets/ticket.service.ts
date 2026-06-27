@@ -1,5 +1,11 @@
 import { Prisma, TicketStatus } from "@prisma/client";
 import { prisma } from "../../config/database";
+import { assertTicketLimit } from "../subscription/subscription.service";
+import {
+  sendRepairReceived,
+  sendStatusUpdate,
+  sendInvoiceDelivery,
+} from "../notifications/notification.service";
 
 async function nextTicketNumber(tenantId: string) {
   const count = await prisma.ticket.count({ where: { tenantId } });
@@ -142,6 +148,8 @@ export async function createTicket(
     estimatedCost?: number | null;
   }
 ) {
+  await assertTicketLimit(tenantId);
+
   const customer = await prisma.customer.findFirst({
     where: { id: input.customerId, tenantId },
   });
@@ -180,6 +188,8 @@ export async function createTicket(
     },
     include: ticketInclude,
   });
+
+  sendRepairReceived(ticket.id).catch((err) => console.error("Failed to send repair received notification:", err));
 
   return serializeTicket(ticket);
 }
@@ -220,6 +230,14 @@ export async function updateTicket(
     },
     include: ticketInclude,
   });
+
+  if (input.status && input.status !== existing.status) {
+    sendStatusUpdate(ticket.id, input.status).catch((err) => console.error("Failed to send status update notification:", err));
+  }
+
+  if (input.invoiceAmount && input.invoiceAmount !== Number(existing.invoiceAmount)) {
+    sendInvoiceDelivery(ticket.id).catch((err) => console.error("Failed to send invoice notification:", err));
+  }
 
   return serializeTicket(ticket);
 }
@@ -322,6 +340,8 @@ export async function collectPayment(tenantId: string, ticketId: string) {
     },
     include: ticketInclude,
   });
+
+  sendStatusUpdate(updatedTicket.id, "PAYMENT_COMPLETED").catch((err) => console.error("Failed to send payment completed notification:", err));
 
   return serializeTicket(updatedTicket);
 }

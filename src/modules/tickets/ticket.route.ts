@@ -30,6 +30,11 @@ router.get("/", (req, res, next) => {
   listTicketsController(req, res).catch(next);
 });
 
+// Must come before /:id so "new" is not treated as a ticket ID
+router.get("/new", (_req, res) => {
+  res.json({ ticket: null });
+});
+
 router.get("/:id", (req, res, next) => {
   getTicketController(req, res).catch(next);
 });

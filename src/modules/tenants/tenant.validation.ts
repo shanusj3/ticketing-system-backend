@@ -9,5 +9,16 @@ export const createTenantSchema = z.object({
   slug: z.string().trim().min(2).regex(/^[a-z0-9-]+$/, "Slug must contain only lowercase letters, numbers, and hyphens"),
   primaryColor: z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, "Primary color must be a valid hex color code"),
   logoUrl: z.string().optional().nullable(),
-  subscriptionPlan: z.enum(["PROFESSIONAL", "BUSINESS"]).default("PROFESSIONAL"),
+  subscriptionPlan: z.enum(["STARTER", "BUSINESS", "ENTERPRISE"]).default("STARTER"),
+  customPriceInr: z.number().int().positive().optional().nullable(),
+});
+
+export const switchPlanSchema = z.object({
+  subscriptionPlan: z.enum(["STARTER", "BUSINESS", "ENTERPRISE"]),
+  durationMonths: z.number().int().min(1).default(1),
+  customPriceInr: z.number().int().positive().optional().nullable(),
+});
+
+export const updateStatusSchema = z.object({
+  status: z.enum(["ACTIVE", "SUSPENDED"]),
 });

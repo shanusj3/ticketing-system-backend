@@ -7,14 +7,23 @@ import { env } from "./config/env";
 
 export const app = express();
 
+const TENANT_SUBDOMAIN_PATTERN = /^(https:\/\/[a-z0-9-]+\.zeviodesk\.com|http:\/\/[a-z0-9-]+\.localhost:\d+)$/;
+
 app.use(
   cors({
     origin: (origin, callback) => {
+
       if (!origin) {
         return callback(null, true);
       }
 
+
       if (env.corsOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+
+      if (TENANT_SUBDOMAIN_PATTERN.test(origin)) {
         return callback(null, true);
       }
 

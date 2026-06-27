@@ -1,7 +1,7 @@
 import { UserRole } from "@prisma/client";
 import { Router } from "express";
 import { requireAuth, requireRole } from "../auth/auth.permission";
-import { createUserController, listUsersController } from "./user.controller";
+import { createUserController, listUsersController, updateMyPasswordController, resetTenantUserPasswordController } from "./user.controller";
 
 const router = Router();
 
@@ -16,6 +16,14 @@ router.get("/", requireRole(...readRoles), (req, res, next) => {
 
 router.post("/", requireRole(...tenantAdminRoles), (req, res, next) => {
   createUserController(req, res).catch(next);
+});
+
+router.patch("/me/password", (req, res, next) => {
+  updateMyPasswordController(req, res).catch(next);
+});
+
+router.patch("/:id/password", requireRole(...tenantAdminRoles), (req, res, next) => {
+  resetTenantUserPasswordController(req, res).catch(next);
 });
 
 export default router;

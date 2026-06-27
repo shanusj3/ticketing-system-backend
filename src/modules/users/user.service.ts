@@ -46,3 +46,38 @@ export async function createTenantUser(
     throw error;
   }
 }
+
+export async function updateMyPassword(userId: string, oldPassword: string, newPassword: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    throw Object.assign(new Error("User not found"), { status: 404 });
+  }
+
+  const isValid = await bcrypt.compare(oldPassword, user.passwordHash);
+  if (!isValid) {
+    throw Object.assign(new Error("Incorrect current password"), { status: 400 });
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  await prisma.user.update({
+    where: { id: userId },
+    data: { passwordHash },
+  });
+}
+
+export async function resetTenantUserPassword(tenantId: string, targetUserId: string, newPassword: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: targetUserId },
+    select: { tenantId: true },
+  });
+
+  if (!user || user.tenantId !== tenantId) {
+    throw Object.assign(new Error("User not found in this tenant"), { status: 404 });
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  await prisma.user.update({
+    where: { id: targetUserId },
+    data: { passwordHash },
+  });
+}

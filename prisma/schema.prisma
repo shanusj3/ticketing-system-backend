@@ -21,8 +21,9 @@ enum TenantStatus {
 }
 
 enum SubscriptionPlan {
-  PROFESSIONAL
+  STARTER
   BUSINESS
+  ENTERPRISE
 }
 
 enum DeviceType {
@@ -61,24 +62,115 @@ enum LineItemType {
   EXTRA_CHARGE
 }
 
+enum WhatsAppStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+enum NotificationType {
+  REPAIR_RECEIVED
+  STATUS_UPDATE
+  READY_FOR_PICKUP
+  INVOICE_DELIVERY
+  TRACKING_LINK
+  DELIVERY_CONFIRMATION
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
 model Tenant {
-  id               String           @id @default(cuid())
-  name             String
-  slug             String           @unique
-  domain           String           @unique
-  status           TenantStatus     @default(ACTIVE)
-  subscriptionPlan SubscriptionPlan @default(PROFESSIONAL)
-  contactName      String           @default("")
-  email            String           @default("")
-  phone            String           @default("")
-  mobile           String?
-  primaryColor     String           @default("#3b82f6")
-  logoUrl          String?
-  users            User[]
-  customers        Customer[]
-  tickets          Ticket[]
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  id                   String           @id @default(cuid())
+  name                 String
+  slug                 String           @unique
+  domain               String           @unique
+  status               TenantStatus     @default(ACTIVE)
+  subscriptionPlan     SubscriptionPlan @default(STARTER)
+  subscriptionStartDate DateTime        @default(now())
+  subscriptionEndDate   DateTime        @default(now())
+  customPriceInr       Int?
+  periodTicketCount    Int              @default(0)
+  // Queued plan (for downgrades or scheduled next plan)
+  queuedPlan             SubscriptionPlan?
+  queuedPlanStartDate    DateTime?
+  queuedPlanEndDate      DateTime?
+  queuedPlanCustomPriceInr Int?
+  contactName          String           @default("")
+  email                String           @default("")
+  phone                String           @default("")
+  mobile               String?
+  primaryColor         String           @default("#3b82f6")
+  logoUrl              String?
+  users                User[]
+  customers            Customer[]
+  tickets              Ticket[]
+  branches             Branch[]
+  whatsapp             TenantWhatsapp?
+  notificationUsage    NotificationUsage[]
+  notificationLogs     NotificationLog[]
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+}
+
+model Branch {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  address   String?
+  isMain    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+model TenantWhatsapp {
+  id                String         @id @default(cuid())
+  tenantId          String         @unique
+  tenant            Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  phoneNumberId     String
+  businessAccountId String
+  accessToken       String
+  wabaPhoneNumber   String
+  status            WhatsAppStatus @default(CONNECTED)
+  connectedAt       DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+}
+
+model NotificationUsage {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  month    String
+  used     Int    @default(0)
+  limit    Int    @default(1000)
+
+  @@unique([tenantId, month])
+  @@index([tenantId])
+}
+
+model NotificationLog {
+  id            String             @id @default(cuid())
+  tenantId      String
+  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId      String?
+  customerPhone String
+  customerName  String?
+  type          NotificationType
+  status        NotificationStatus @default(PENDING)
+  metaMessageId String?
+  errorMessage  String?
+  sentAt        DateTime           @default(now())
+
+  @@index([tenantId])
+  @@index([ticketId])
 }
 
 model User {

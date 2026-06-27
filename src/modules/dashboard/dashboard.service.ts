@@ -1,8 +1,162 @@
 import { TicketStatus, UserRole } from "@prisma/client";
 import { prisma } from "../../config/database";
+import { getPlanDefinition } from "../../config/subscription-plans";
 import { formatStatus } from "../tickets/ticket.service";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function formatInr(value: number) {
+  return `INR ${value.toLocaleString("en-IN")}`;
+}
+
+function daysUntil(date: Date, from = new Date()) {
+  const start = new Date(from);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(0, 0, 0, 0);
+
+  return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+export async function getSuperAdminDashboardData() {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const sixMonthsStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+  const sevenDaysFromNow = new Date(now);
+  sevenDaysFromNow.setDate(now.getDate() + 7);
+  sevenDaysFromNow.setHours(23, 59, 59, 999);
+
+  const tenants = await prisma.tenant.findMany({
+    orderBy: { createdAt: "desc" },
+    include: {
+      _count: {
+        select: { users: true, tickets: true, branches: true },
+      },
+    },
+  });
+
+  const activeTenants = tenants.filter((tenant) => tenant.status === "ACTIVE");
+  const suspendedTenants = tenants.length - activeTenants.length;
+  const newThisMonth = tenants.filter((tenant) => tenant.createdAt >= monthStart).length;
+  const platformMrr = activeTenants.reduce((sum, tenant) => {
+    const plan = getPlanDefinition(tenant.subscriptionPlan);
+    return sum + (tenant.customPriceInr ?? plan.priceInr);
+  }, 0);
+  const expiringSoon = activeTenants
+    .filter((tenant) => tenant.subscriptionEndDate >= now && tenant.subscriptionEndDate <= sevenDaysFromNow)
+    .sort((a, b) => a.subscriptionEndDate.getTime() - b.subscriptionEndDate.getTime());
+
+  const growthData = Array.from({ length: 6 }, (_, index) => {
+    const month = new Date(now.getFullYear(), now.getMonth() - 5 + index, 1);
+    const nextMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+
+    return {
+      name: MONTH_NAMES[month.getMonth()],
+      active: tenants.filter((tenant) => tenant.status === "ACTIVE" && tenant.createdAt < nextMonth).length,
+      new: tenants.filter((tenant) => tenant.createdAt >= month && tenant.createdAt < nextMonth).length,
+    };
+  });
+
+  const totalTickets = tenants.reduce((sum, tenant) => sum + tenant._count.tickets, 0);
+  const totalUsers = tenants.reduce((sum, tenant) => sum + tenant._count.users, 0);
+
+  return {
+    summaryCards: [
+      {
+        id: "totalTenants",
+        title: "Total Tenants",
+        value: tenants.length.toString(),
+        description: `${newThisMonth} new this month`,
+        tone: "primary",
+        icon: "building",
+      },
+      {
+        id: "activeSubscriptions",
+        title: "Active Subscriptions",
+        value: activeTenants.length.toString(),
+        description: `${suspendedTenants} suspended tenants`,
+        tone: "success",
+        icon: "creditCard",
+      },
+      {
+        id: "expiringSoon",
+        title: "Expiring Soon",
+        value: expiringSoon.length.toString(),
+        description: "Subscriptions ending in 7 days",
+        tone: "warning",
+        icon: "alert",
+      },
+      {
+        id: "platformMrr",
+        title: "Platform MRR",
+        value: formatInr(platformMrr),
+        description: "Estimated from active plans",
+        tone: "primary",
+        icon: "trending",
+      },
+    ],
+    tenantGrowth: {
+      title: "Tenant Growth & Acquisition",
+      description: "Active vs new onboarding per month.",
+      series: {
+        active: "Active Tenants",
+        new: "New Tenants",
+      },
+      data: growthData,
+    },
+    recentTenants: {
+      title: "Recent Tenants",
+      description: "Latest shop accounts created by super admin.",
+      emptyMessage: "No tenants created yet.",
+      items: tenants.slice(0, 5).map((tenant) => ({
+        id: tenant.id,
+        name: tenant.name,
+        initials: tenant.name.slice(0, 2).toUpperCase(),
+        domain: tenant.domain,
+        status: tenant.status,
+        users: tenant._count.users,
+        tickets: tenant._count.tickets,
+        createdAt: tenant.createdAt,
+      })),
+    },
+    expiringSubscriptions: {
+      title: "Subscriptions Expiring (7 Days)",
+      emptyMessage: "No subscriptions are expiring in the next 7 days.",
+      description:
+        expiringSoon.length > 0
+          ? `${expiringSoon.length} tenant subscription${expiringSoon.length === 1 ? "" : "s"} need attention.`
+          : "No active subscriptions expire in the next 7 days.",
+      items: expiringSoon.slice(0, 5).map((tenant) => {
+        const plan = getPlanDefinition(tenant.subscriptionPlan);
+        return {
+          id: tenant.id,
+          name: tenant.name,
+          plan: plan.name,
+          endDate: tenant.subscriptionEndDate,
+          daysRemaining: daysUntil(tenant.subscriptionEndDate, now),
+          priceInr: tenant.customPriceInr ?? plan.priceInr,
+        };
+      }),
+    },
+    systemHealth: {
+      title: "System Health",
+      status: "LIVE",
+      message: "Core services operational",
+      tiles: [
+        { label: "API Status", value: "ONLINE", tone: "success" },
+        { label: "Tenant Isolation", value: "ENABLED", tone: "success" },
+        { label: "Total Users", value: totalUsers.toString(), tone: "neutral" },
+        { label: "Total Tickets", value: totalTickets.toString(), tone: "neutral" },
+      ],
+    },
+    generatedAt: now,
+    range: {
+      from: sixMonthsStart,
+      to: now,
+    },
+  };
+}
 
 export async function getDashboardStats(tenantId: string, userId: string, userRole: string) {
   const now = new Date();

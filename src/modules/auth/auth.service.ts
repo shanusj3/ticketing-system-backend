@@ -19,9 +19,31 @@ const publicUserSelect = {
       slug: true,
       subscriptionPlan: true,
       status: true,
+      logoUrl: true,
     },
   },
 } as const;
+
+const ACCESS_TOKEN_EXPIRES_IN = "15m";
+const REFRESH_TOKEN_EXPIRES_IN = "7d";
+
+function createTokenPair(payload: Omit<JwtPayload, "type">) {
+  const accessToken = jwt.sign({ ...payload, type: "access" }, env.jwtSecret, {
+    expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+  });
+  const refreshToken = jwt.sign({ ...payload, type: "refresh" }, env.jwtSecret, {
+    expiresIn: REFRESH_TOKEN_EXPIRES_IN,
+  });
+
+  return { accessToken, refreshToken };
+}
+
+async function getSafeUser(userId: string) {
+  return prisma.user.findUniqueOrThrow({
+    where: { id: userId },
+    select: publicUserSelect,
+  });
+}
 
 export async function ensureSuperAdmin() {
   const existing = await prisma.user.findUnique({
@@ -64,7 +86,7 @@ export async function login(email: string, password: string, tenantSlug?: string
     }
     if (user.tenantId !== tenant.id) {
       throw Object.assign(
-        new Error("Access denied: You do not have permission to access this tenant workspace"), 
+        new Error("Access denied: You do not have permission to access this tenant workspace"),
         { status: 403 }
       );
     }
@@ -89,11 +111,65 @@ export async function login(email: string, password: string, tenantSlug?: string
     tenantId: user.tenantId,
   };
 
-  const token = jwt.sign(payload, env.jwtSecret, { expiresIn: "1d" });
-  const safeUser = await prisma.user.findUniqueOrThrow({
-    where: { id: user.id },
-    select: publicUserSelect,
+  const tokens = createTokenPair(payload);
+  const safeUser = await getSafeUser(user.id);
+
+  return { ...tokens, user: safeUser };
+}
+
+export async function refreshSession(refreshToken: string) {
+  let payload: JwtPayload;
+
+  try {
+    payload = jwt.verify(refreshToken, env.jwtSecret) as JwtPayload;
+  } catch {
+    throw Object.assign(new Error("Invalid refresh token"), { status: 401 });
+  }
+
+  if (payload.type !== "refresh") {
+    throw Object.assign(new Error("Invalid refresh token"), { status: 401 });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: payload.userId },
+    select: {
+      id: true,
+      isActive: true,
+      role: true,
+      tenantId: true,
+      tenant: { select: { status: true } },
+    },
   });
 
-  return { token, user: safeUser };
+  if (!user || !user.isActive || (user.tenant && user.tenant.status !== "ACTIVE")) {
+    throw Object.assign(new Error("Authentication required"), { status: 401 });
+  }
+
+  const nextPayload: Omit<JwtPayload, "type"> = {
+    userId: user.id,
+    role: user.role,
+    tenantId: user.tenantId,
+  };
+
+  return {
+    ...createTokenPair(nextPayload),
+    user: await getSafeUser(user.id),
+  };
+}
+
+export async function getCurrentUser(payload: JwtPayload) {
+  const user = await prisma.user.findUnique({
+    where: { id: payload.userId },
+    select: {
+      id: true,
+      isActive: true,
+      tenant: { select: { status: true } },
+    },
+  });
+
+  if (!user || !user.isActive || (user.tenant && user.tenant.status !== "ACTIVE")) {
+    throw Object.assign(new Error("Authentication required"), { status: 401 });
+  }
+
+  return getSafeUser(payload.userId);
 }
