@@ -1,29 +1,26 @@
 import { Router } from "express";
 import authRoutes from "../modules/auth/auth.route";
-import tenantRoutes from "../modules/tenants/tenant.route";
-import subscriptionRoutes from "../modules/subscription/subscription.route";
-import userRoutes from "../modules/users/user.route";
-import customerRoutes from "../modules/customers/customer.route";
-import ticketRoutes from "../modules/tickets/ticket.route";
-import dashboardRoutes from "../modules/dashboard/dashboard.route";
+import superAdminRoutes from "../modules/super-admin/super-admin.route";
+import shopRoutes from "../modules/shop/shop.route";
+import ticketRoutes from "../modules/tickets/tickets.route";
+import invoiceRoutes from "../modules/invoices/invoices.route";
+import trackRoutes from "../modules/track/track.route";
+import uploadRoutes from "../modules/upload/upload.route";
+import tenantRoutes from "../modules/tenant/tenant.route";
+import customerRoutes from "../modules/customers/customers.route";
 import whatsappRoutes from "../modules/whatsapp/whatsapp.route";
-import notificationRoutes from "../modules/notifications/notification.route";
-import uploadRoutes from "../modules/uploads/upload.route";
-import { requireActiveTenant } from "../modules/auth/auth.permission";
 
 const router = Router();
 
 router.use("/auth", authRoutes);
+router.use("/super-admin", superAdminRoutes);
+router.use("/shop", shopRoutes);
+router.use("/tickets", ticketRoutes);
+router.use("/invoices", invoiceRoutes);
+router.use("/track", trackRoutes);
+router.use("/upload", uploadRoutes);
 router.use("/tenants", tenantRoutes);
-router.use("/subscription", subscriptionRoutes);
-
-// Apply active tenant guard to all tenant-level data routes
-router.use("/users", requireActiveTenant, userRoutes);
-router.use("/customers", requireActiveTenant, customerRoutes);
-router.use("/tickets", requireActiveTenant, ticketRoutes);
-router.use("/dashboard", requireActiveTenant, dashboardRoutes);
-router.use("/whatsapp", requireActiveTenant, whatsappRoutes);
-router.use("/notifications", requireActiveTenant, notificationRoutes);
-router.use("/uploads", requireActiveTenant, uploadRoutes);
+router.use("/customers", customerRoutes);
+router.use("/whatsapp", whatsappRoutes);
 
 export default router;

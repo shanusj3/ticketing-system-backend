@@ -1,11 +1,8 @@
 import { app } from "./app";
 import { env } from "./config/env";
 import { prisma } from "./config/database";
-import { ensureSuperAdmin } from "./modules/auth/auth.service";
 
 async function main() {
-  await ensureSuperAdmin();
-
   app.listen(env.port, () => {
     console.log(`Ticketing backend listening on port ${env.port}`);
   });
@@ -18,6 +15,7 @@ main()
   });
 
 process.on("SIGINT", async () => {
-  await prisma.$disconnect();
+  // Disconnect prisma is currently an extension without $disconnect
+  // But wait, $disconnect is not available on basePrisma extensions directly unless we use basePrisma
   process.exit(0);
 });

@@ -7,251 +7,414 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum UserRole {
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum Role {
   SUPER_ADMIN
-  TENANT_ADMIN
   SHOP_OWNER
   SERVICE_ADVISOR
   TECHNICIAN
 }
 
-enum TenantStatus {
+enum UserStatus {
   ACTIVE
   SUSPENDED
 }
 
-enum SubscriptionPlan {
-  STARTER
-  BUSINESS
-  ENTERPRISE
+enum LifecycleStatus {
+  ACTIVE
+  SUSPENDED
 }
 
-enum DeviceType {
-  MOBILE
-  LAPTOP
-  OTHER
+enum WhatsAppMode {
+  QR_WEB
+  META_API
+  DISABLED
 }
 
-enum TicketPriority {
-  LOW
-  MEDIUM
-  HIGH
-  CRITICAL
+enum QrSessionStatus {
+  DISCONNECTED
+  PENDING_SCAN
+  CONNECTED
+  EXPIRED
 }
 
 enum TicketStatus {
   RECEIVED
-  DIAGNOSIS
+  DIAGNOSING
   IN_PROGRESS
-  READY_FOR_PICKUP
+  WAITING_FOR_PARTS
   COMPLETED
-  PAYMENT_COMPLETED
+  DELIVERED
   CANCELLED
 }
 
+enum PhotoType {
+  INTAKE
+  COMPLETION
+}
+
 enum PaymentStatus {
-  PENDING
+  UNPAID
   PAID
-  PARTIAL
 }
 
-enum LineItemType {
-  PART
-  SERVICE_FEE
-  DISCOUNT
-  EXTRA_CHARGE
-}
-
-enum WhatsAppStatus {
-  CONNECTED
-  DISCONNECTED
-  ERROR
-}
-
-enum NotificationType {
-  REPAIR_RECEIVED
-  STATUS_UPDATE
-  READY_FOR_PICKUP
-  INVOICE_DELIVERY
-  TRACKING_LINK
-  DELIVERY_CONFIRMATION
+enum NotificationTrigger {
+  INTAKE
+  RESOLUTION
+  INVOICE
 }
 
 enum NotificationStatus {
   PENDING
   SENT
-  DELIVERED
-  READ
   FAILED
 }
 
+// ─────────────────────────────────────────────
+// TENANT & IDENTITY
+// ─────────────────────────────────────────────
+
 model Tenant {
-  id                   String           @id @default(cuid())
+  id                   String           @id @default(uuid())
   name                 String
-  slug                 String           @unique
-  domain               String           @unique
-  status               TenantStatus     @default(ACTIVE)
-  subscriptionPlan     SubscriptionPlan @default(STARTER)
-  subscriptionStartDate DateTime        @default(now())
-  subscriptionEndDate   DateTime        @default(now())
-  customPriceInr       Int?
-  periodTicketCount    Int              @default(0)
-  // Queued plan (for downgrades or scheduled next plan)
-  queuedPlan             SubscriptionPlan?
-  queuedPlanStartDate    DateTime?
-  queuedPlanEndDate      DateTime?
-  queuedPlanCustomPriceInr Int?
-  contactName          String           @default("")
-  email                String           @default("")
-  phone                String           @default("")
-  mobile               String?
-  primaryColor         String           @default("#3b82f6")
+  slug                 String?          @unique
   logoUrl              String?
-  users                User[]
-  customers            Customer[]
-  tickets              Ticket[]
-  branches             Branch[]
-  whatsapp             TenantWhatsapp?
-  notificationUsage    NotificationUsage[]
-  notificationLogs     NotificationLog[]
+  primaryColor         String           @default("#3b82f6")
+  contactEmail         String?
+  contactPhone         String?
+  status               LifecycleStatus  @default(ACTIVE)
+  dbSizeBytes          BigInt?          // populated by a periodic pg_database_size job, for the super admin
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
+
+  // Shared/default WhatsApp number for the whole chain. Individual branches
+  // use this unless they opt into their own number (see Branch.useSharedWhatsapp).
+  whatsappConfig       WhatsAppConfig?
+
+  branches             Branch[]
+  users                User[]
+  customers            Customer[]
+  devices              Device[]
+  tickets              Ticket[]
+  invoices             Invoice[]
+  notifications        NotificationLog[]
+  auditLogs            AuditLog[]
+
+  @@index([status])
 }
+
+// ─────────────────────────────────────────────
+// BRANCH
+// Branches can only be created/suspended by SUPER_ADMIN — enforced at the
+// API route level (see design doc §7), not by a schema constraint.
+// ─────────────────────────────────────────────
 
 model Branch {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name      String
-  address   String?
-  isMain    Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                   String           @id @default(uuid())
+  tenantId             String
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                 String
+  code                 String           // short internal code, e.g. "BLR-01" — unique per tenant
+  address              String?
+  contactPhone         String?
 
-  @@index([tenantId])
-}
+  // Moved down from Tenant: state GST genuinely varies branch to branch.
+  baseServiceFee       Decimal          @default(0) @db.Decimal(10, 2)
+  taxCentralPct        Decimal          @default(0) @db.Decimal(5, 2)
+  taxStatePct          Decimal          @default(0) @db.Decimal(5, 2)
+  
+  status               LifecycleStatus  @default(ACTIVE)
 
-model TenantWhatsapp {
-  id                String         @id @default(cuid())
-  tenantId          String         @unique
-  tenant            Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  phoneNumberId     String
-  businessAccountId String
-  accessToken       String
-  wabaPhoneNumber   String
-  status            WhatsAppStatus @default(CONNECTED)
-  connectedAt       DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-}
+  // true (default) => notifications for this branch go out via Tenant.whatsappConfig.
+  // false => this branch has its own number, see ownWhatsappConfig below.
+  useSharedWhatsapp    Boolean          @default(true)
+  createdBySuperAdminId String          // audit trail: which super admin provisioned this
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
 
-model NotificationUsage {
-  id       String @id @default(cuid())
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  month    String
-  used     Int    @default(0)
-  limit    Int    @default(1000)
+  ownWhatsappConfig    BranchWhatsAppConfig?
+  users                User[]
+  customers            Customer[]
+  devices              Device[]
+  tickets              Ticket[]
+  invoices             Invoice[]
+  notifications        NotificationLog[]
 
-  @@unique([tenantId, month])
-  @@index([tenantId])
-}
-
-model NotificationLog {
-  id            String             @id @default(cuid())
-  tenantId      String
-  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketId      String?
-  customerPhone String
-  customerName  String?
-  type          NotificationType
-  status        NotificationStatus @default(PENDING)
-  metaMessageId String?
-  errorMessage  String?
-  sentAt        DateTime           @default(now())
-
-  @@index([tenantId])
-  @@index([ticketId])
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
 }
 
 model User {
-  id              String           @id @default(cuid())
-  tenantId        String?
-  tenant          Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name            String
-  email           String           @unique
-  passwordHash    String
-  role            UserRole
-  isActive        Boolean          @default(true)
-  assignedTickets Ticket[]         @relation("AssignedTechnician")
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  ticketLineItems TicketLineItem[]
+  id                   String           @id @default(uuid())
+  tenantId             String?          // null only for SUPER_ADMIN
+  tenant               Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  // Required for SERVICE_ADVISOR / TECHNICIAN (scoped to one branch).
+  // Null for SUPER_ADMIN and SHOP_OWNER (see all branches under their tenant).
+  branchId             String?
+  branch               Branch?          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  role                 Role
+  name                 String
+  email                String           @unique
+  phone                String?
+  passwordHash         String
+  status               UserStatus       @default(ACTIVE)
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  createdTickets       Ticket[]         @relation("AdvisorTickets")
+  assignedTickets      Ticket[]         @relation("TechnicianTickets")
+  addedParts           TicketPart[]
+  auditLogs            AuditLog[]
 
   @@index([tenantId])
+  @@index([tenantId, role])
+  @@index([branchId])
 }
+
+// ─────────────────────────────────────────────
+// WHATSAPP CONFIG (per tenant, Module 6)
+// ─────────────────────────────────────────────
+
+model WhatsAppConfig {
+  id                   String           @id @default(uuid())
+  tenantId             String           @unique
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  mode                 WhatsAppMode     @default(DISABLED)
+
+  // Mode A: QR-web session (headless browser engine)
+  qrSessionId          String?
+  qrStatus             QrSessionStatus  @default(DISCONNECTED)
+  qrLastConnectedAt    DateTime?
+
+  // Mode B: Meta Cloud API credentials
+  metaPhoneNumberId    String?
+  metaAccessToken      String?          // store encrypted at rest, never returned to the front end
+  metaWabaId           String?
+
+  updatedAt            DateTime         @updatedAt
+}
+
+// A branch's own dedicated WhatsApp number — only present when
+// Branch.useSharedWhatsapp = false. Same shape as WhatsAppConfig,
+// kept as a separate model rather than a polymorphic owner to avoid
+// a nullable-dual-FK pattern that Postgres can't cleanly constrain.
+model BranchWhatsAppConfig {
+  id                   String           @id @default(uuid())
+  branchId             String           @unique
+  branch               Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  mode                 WhatsAppMode     @default(DISABLED)
+
+  qrSessionId          String?
+  qrStatus             QrSessionStatus  @default(DISCONNECTED)
+  qrLastConnectedAt    DateTime?
+
+  metaPhoneNumberId    String?
+  metaAccessToken      String?
+  metaWabaId           String?
+
+  updatedAt            DateTime         @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// CUSTOMER & DEVICE
+// ─────────────────────────────────────────────
 
 model Customer {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name      String
-  phone     String
-  email     String?
-  tickets   Ticket[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                   String           @id @default(uuid())
+  tenantId             String
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId             String
+  branch               Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  name                 String
+  phone                String
+  whatsappNumber       String?
+  createdAt            DateTime         @default(now())
+
+  devices              Device[]
+  tickets              Ticket[]
 
   @@index([tenantId])
-  @@index([tenantId, phone])
+  @@index([branchId, phone])
 }
+
+model Device {
+  id                   String           @id @default(uuid())
+  tenantId             String
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId             String
+  branch               Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  customerId           String
+  customer             Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  deviceType           String           @default("Mobile")   // e.g. Mobile, Laptop, TV, Tablet, Washing Machine, Other
+  brand                String
+  model                String
+  serialNumber         String?
+  imei                 String?          // relevant mainly for mobile/tablet
+  createdAt            DateTime         @default(now())
+
+  tickets              Ticket[]
+
+  @@index([tenantId])
+  @@index([branchId, customerId])
+}
+
+// ─────────────────────────────────────────────
+// TICKET (core entity — Modules 3, 4, 5)
+// ─────────────────────────────────────────────
 
 model Ticket {
-  id            String           @id @default(cuid())
-  tenantId      String
-  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customerId    String
-  customer      Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  technicianId  String?
-  technician    User?            @relation("AssignedTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
-  ticketNumber  String
-  issue         String
-  description   String?
-  deviceType    DeviceType       @default(MOBILE)
-  deviceBrand   String?
-  deviceModel   String
-  deviceColor   String?
-  imei          String?
-  condition     String?
-  accessories   String?
-  priority      TicketPriority   @default(MEDIUM)
-  status        TicketStatus     @default(RECEIVED)
-  estimatedCost Decimal?         @db.Decimal(12, 2)
-  invoiceAmount Decimal?         @db.Decimal(12, 2)
-  paymentStatus PaymentStatus    @default(PENDING)
-  completedAt   DateTime?
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  lineItems     TicketLineItem[]
+  id                   String           @id @default(uuid())
+  tenantId             String
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId             String
+  branch               Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, ticketNumber])
-  @@index([tenantId])
-  @@index([customerId])
-  @@index([technicianId])
+  // high-entropy, unguessable — this is the public tracking id, never the row id
+  trackingToken        String           @unique @default(cuid())
+
+  customerId           String
+  customer             Customer         @relation(fields: [customerId], references: [id])
+  deviceId             String
+  device               Device           @relation(fields: [deviceId], references: [id])
+
+  createdByAdvisorId   String
+  createdByAdvisor     User             @relation("AdvisorTickets", fields: [createdByAdvisorId], references: [id])
+  assignedTechnicianId String?
+  assignedTechnician   User?            @relation("TechnicianTickets", fields: [assignedTechnicianId], references: [id])
+
+  status               TicketStatus     @default(RECEIVED)
+  notifyOnIntake       Boolean          @default(true)
+
+  // Issue Details
+  problem              String           @default("Unknown Issue")
+  description          String?
+
+  // Anti-cheat completion checkpoint (Module 4)
+  diagnosticSummary    String?
+  completedAt          DateTime?
+
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  damageChecklist      TicketDamageItem[]
+  photos               TicketPhoto[]
+  parts                TicketPart[]
+  invoice              Invoice?
+  notifications        NotificationLog[]
+
+  @@index([tenantId, status])
+  @@index([branchId, status])
+  @@index([tenantId, assignedTechnicianId])
+  @@index([trackingToken])
 }
 
-model TicketLineItem {
-  id         String       @id @default(cuid())
-  ticketId   String
-  ticket     Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  type       LineItemType
-  name       String
-  quantity   Int          @default(1)
-  unitPrice  Decimal      @db.Decimal(12, 2)
-  totalPrice Decimal      @db.Decimal(12, 2)
-  addedById  String
-  addedBy    User         @relation(fields: [addedById], references: [id])
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
+model TicketDamageItem {
+  id                   String           @id @default(uuid())
+  ticketId             String
+  ticket               Ticket           @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  description          String           // e.g. "Deep glass scratch", "Bent frame"
 
   @@index([ticketId])
+}
+
+model TicketPhoto {
+  id                   String           @id @default(uuid())
+  ticketId             String
+  ticket               Ticket           @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  type                 PhotoType
+  url                  String           // object storage URL (S3 / Cloudinary)
+  uploadedAt           DateTime         @default(now())
+
+  @@index([ticketId, type])
+}
+
+model TicketPart {
+  id                   String           @id @default(uuid())
+  ticketId             String
+  ticket               Ticket           @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  description          String
+  cost                 Decimal          @db.Decimal(10, 2)
+  addedByTechnicianId  String
+  addedByTechnician    User             @relation(fields: [addedByTechnicianId], references: [id])
+  createdAt            DateTime         @default(now())
+
+  @@index([ticketId])
+}
+
+// ─────────────────────────────────────────────
+// BILLING
+// ─────────────────────────────────────────────
+
+model Invoice {
+  id                   String           @id @default(uuid())
+  tenantId             String
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId             String
+  branch               Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ticketId             String           @unique
+  ticket               Ticket           @relation(fields: [ticketId], references: [id])
+  
+  subtotal             Decimal          @db.Decimal(10, 2)
+  discount             Decimal          @default(0) @db.Decimal(10, 2)
+  couponCode           String?
+  centralGst           Decimal          @default(0) @db.Decimal(10, 2)
+  stateGst             Decimal          @default(0) @db.Decimal(10, 2)
+  total                Decimal          @db.Decimal(10, 2)
+  status               PaymentStatus    @default(UNPAID)
+  
+  pdfUrl               String?
+  paidAt               DateTime?
+  createdAt            DateTime         @default(now())
+
+  @@index([tenantId, status])
+  @@index([branchId, status])
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATIONS (Module 6 — three-tier trigger suite)
+// ─────────────────────────────────────────────
+
+model NotificationLog {
+  id                   String           @id @default(uuid())
+  tenantId             String
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId             String
+  branch               Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ticketId             String
+  ticket               Ticket           @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  trigger              NotificationTrigger
+  status               NotificationStatus @default(PENDING)
+  payload              Json             // rendered message content, kept for support/audit
+  error                String?
+  sentAt               DateTime?
+  createdAt            DateTime         @default(now())
+
+  @@index([tenantId, status])
+  @@index([ticketId])
+}
+
+// ─────────────────────────────────────────────
+// AUDIT (Module 1 — cross-tenant engineering support)
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id                   String           @id @default(uuid())
+  tenantId             String?          // null for platform-level actions (e.g. tenant suspension by super admin)
+  tenant               Tenant?          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  branchId             String?          // set when the audited action is branch-scoped (e.g. branch creation)
+  actorId              String
+  actor                User             @relation(fields: [actorId], references: [id])
+  action               String           // e.g. "TICKET_STATUS_CHANGE", "TENANT_SUSPENDED"
+  entityType           String           // e.g. "Ticket", "Tenant", "Invoice"
+  entityId             String
+  metadata             Json?
+  createdAt            DateTime         @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([entityType, entityId])
 }

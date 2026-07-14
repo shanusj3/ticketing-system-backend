@@ -7,7 +7,10 @@ import { env } from "./config/env";
 
 export const app = express();
 
-const TENANT_SUBDOMAIN_PATTERN = /^(https:\/\/[a-z0-9-]+\.zeviodesk\.com|http:\/\/[a-z0-9-]+\.localhost:\d+)$/;
+const rootDomain = process.env.ROOT_DOMAIN || 'localhost:3000';
+// Matches any subdomain of the root domain. Escape dots in rootDomain.
+const escapedRootDomain = rootDomain.replace(/\./g, '\\.');
+const TENANT_SUBDOMAIN_PATTERN = new RegExp(`^(https?:\\/\\/[a-z0-9-]+\\.${escapedRootDomain})$`);
 
 app.use(
   cors({
@@ -17,11 +20,9 @@ app.use(
         return callback(null, true);
       }
 
-
       if (env.corsOrigins.includes(origin)) {
         return callback(null, true);
       }
-
 
       if (TENANT_SUBDOMAIN_PATTERN.test(origin)) {
         return callback(null, true);
